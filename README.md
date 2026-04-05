@@ -23,14 +23,21 @@ brew install android-platform-tools scrcpy
 sudo apt install adb scrcpy
 
 # Windows — download Platform Tools zip, add to PATH
-# scrcpy will install automatically on first run via winget/chocolatey
+# scrcpy will install automatically on first run if winget/choco/scoop is available
 ```
 
 ### Automatic dependency setup
 
 On first run, the script will:
 - Check for `adb` (required — must be installed manually)
-- Check for `scrcpy` (auto-installs if missing via: winget, chocolatey, brew, apt, or snap)
+- Check for `scrcpy` (auto-installs if missing via your package manager)
+
+Supported install methods:
+- **Windows**: winget, Chocolatey, or Scoop
+- **macOS**: Homebrew
+- **Linux**: apt-get, snap, or flatpak
+
+If package managers are unavailable, the script falls back to downloading the latest scrcpy release from GitHub and installing the appropriate ZIP/tarball manually.
 
 ---
 
@@ -171,15 +178,17 @@ If none work, a warning is shown — TCP/IP still works, only charging control i
 The script will check for required dependencies on startup:
 
 **scrcpy** is automatically installed if missing using the following methods:
-- **Windows**: winget (preferred) or Chocolatey
+- **Windows**: winget, Chocolatey, or Scoop
 - **macOS**: Homebrew
-- **Linux**: apt-get (preferred) or snap
+- **Linux**: apt-get, snap, or flatpak
+
+If no supported package manager is available, the script falls back to downloading the latest GitHub release and installing from the platform-specific ZIP/tarball.
 
 **adb** must be installed manually (not auto-installed):
 - Download [Android Platform Tools](https://developer.android.com/tools/releases/platform-tools)
 - Extract and add to your `PATH`
 
-If auto-installation of scrcpy fails, you can still install manually from [github.com/Genymobile/scrcpy](https://github.com/Genymobile/scrcpy).
+If auto-installation of scrcpy fails, install manually from [github.com/Genymobile/scrcpy](https://github.com/Genymobile/scrcpy) or ensure your package manager is installed and available in `PATH`.
 
 ---
 
