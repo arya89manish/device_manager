@@ -33,11 +33,11 @@ On first run, the script will:
 - Check for `scrcpy` (auto-installs if missing via your package manager)
 
 Supported install methods:
-- **Windows**: winget, Chocolatey, or Scoop
+- **Windows**: winget (`winget install --id Genymobile.scrcpy --exact --silent`)
 - **macOS**: Homebrew
 - **Linux**: apt-get, snap, or flatpak
 
-If package managers are unavailable, the script falls back to downloading the latest scrcpy release from GitHub and installing the appropriate ZIP/tarball manually.
+If `winget` fails or is unavailable, the script falls back to downloading the latest GitHub release and installing from the appropriate ZIP/tarball manually.
 
 ---
 

@@ -28,6 +28,9 @@ import getpass
 import base64
 import signal
 import platform
+import re
+import tempfile
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -166,74 +169,224 @@ def require_adb():
         sys.exit(1)
 
 
-def _install_scrcpy():
+def _run_install_command(cmd: list[str], description: str) -> bool:
+    step(f"Installing scrcpy via {description}…")
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if result.returncode == 0:
+        ok(f"scrcpy installed successfully via {description}.")
+        return True
+    warn(f"{description} install failed: {result.stderr.strip() or result.stdout.strip()}")
+    return False
+
+
+def _verify_scrcpy_available() -> bool:
+    if shutil.which("scrcpy"):
+        return True
+    result = subprocess.run(["where", "scrcpy"],
+                            capture_output=True, text=True, check=False)
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def _get_latest_scrcpy_release() -> Optional[dict]:
+    url = "https://api.github.com/repos/Genymobile/scrcpy/releases/latest"
+    req = urllib.request.Request(
+        url,
+        headers={"Accept": "application/vnd.github+json",
+                 "User-Agent": "android-device-manager"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode())
+    except Exception as exc:
+        warn(f"Could not fetch scrcpy release metadata: {exc}")
+        return None
+
+
+def _download_file(url: str, dest: Path) -> bool:
+    try:
+        step(f"Downloading {url} …")
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "android-device-manager"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            total = int(resp.headers.get("Content-Length", 0) or 0)
+            downloaded = 0
+            with open(dest, "wb") as f:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total:
+                        pct = downloaded * 100 // total
+                        print(
+                            f"\r  {pct:3d}%  {downloaded // 1024} KB / {total // 1024} KB", end="", flush=True)
+        if total:
+            print()
+        return True
+    except Exception as exc:
+        warn(f"Download failed: {exc}")
+        return False
+
+
+def _install_scrcpy_windows_manual(release: dict) -> bool:
+    assets = release.get("assets", [])
+    asset = next((a for a in assets if re.search(
+        r"scrcpy-win64.*\.zip", a["name"], re.I)), None)
+    if not asset:
+        warn("No Windows ZIP asset available for scrcpy.")
+        return False
+
+    install_dir = Path(os.environ.get(
+        "ProgramFiles", "C:\\Program Files")) / "scrcpy"
+    install_dir.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        archive = Path(tmp) / asset["name"]
+        if not _download_file(asset["browser_download_url"], archive):
+            return False
+        import zipfile
+        with zipfile.ZipFile(archive) as zf:
+            zf.extractall(tmp)
+        extracted_dir = next(Path(tmp).glob("scrcpy*"), None)
+        if not extracted_dir or not extracted_dir.is_dir():
+            warn("Could not find extracted scrcpy directory.")
+            return False
+        for item in extracted_dir.iterdir():
+            target = install_dir / item.name
+            if item.is_dir():
+                shutil.copytree(item, target, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, target)
+
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Environment",
+            0,
+            winreg.KEY_READ | winreg.KEY_WRITE,
+        )
+        current, _ = winreg.QueryValueEx(key, "PATH")
+        if str(install_dir).lower() not in current.lower():
+            new_path = current + ";" + str(install_dir)
+            winreg.SetValueEx(key, "PATH", 0, winreg.REG_EXPAND_SZ, new_path)
+            os.environ["PATH"] = new_path
+            ok("Added scrcpy install directory to user PATH; restart the terminal to use it permanently.")
+        winreg.CloseKey(key)
+    except Exception as exc:
+        warn(f"Could not update PATH automatically: {exc}")
+
+    return True
+
+
+def _install_scrcpy_unix_manual(release: dict) -> bool:
+    assets = release.get("assets", [])
+    asset = next((a for a in assets if re.search(
+        r"(linux|macos).*\.tar\.gz", a["name"], re.I)), None)
+    if not asset:
+        warn("No tarball asset available for scrcpy.")
+        return False
+
+    with tempfile.TemporaryDirectory() as tmp:
+        archive = Path(tmp) / asset["name"]
+        if not _download_file(asset["browser_download_url"], archive):
+            return False
+        run = subprocess.run(
+            ["tar", "xzf", str(archive), "-C", tmp], capture_output=True, text=True)
+        if run.returncode != 0:
+            warn(f"Could not extract archive: {run.stderr.strip()}")
+            return False
+        binary = next(Path(tmp).rglob("scrcpy"), None)
+        if not binary:
+            warn("Could not find scrcpy binary in extracted archive.")
+            return False
+        dest = Path("/usr/local/bin/scrcpy")
+        run = subprocess.run(["sudo", "cp", str(binary), str(
+            dest)], capture_output=True, text=True)
+        if run.returncode != 0:
+            warn(f"Could not install binary: {run.stderr.strip()}")
+            return False
+        run = subprocess.run(
+            ["sudo", "chmod", "+x", str(dest)], capture_output=True, text=True)
+        if run.returncode != 0:
+            warn(f"Could not set executable permissions: {run.stderr.strip()}")
+            return False
+    return True
+
+
+def _install_scrcpy() -> bool:
     """Attempt to install scrcpy via platform-specific methods."""
     system = platform.system()
 
     try:
         if system == "Windows":
-            # Try winget
             if shutil.which("winget"):
-                step("Installing scrcpy via winget…")
-                result = subprocess.run(["winget", "install", "Genymobile.scrcpy"],
-                                        capture_output=True, text=True, timeout=300)
-                if result.returncode == 0:
-                    ok("scrcpy installed successfully via winget.")
-                    return True
-            # Try chocolatey
-            if shutil.which("choco"):
-                step("Installing scrcpy via chocolatey…")
-                result = subprocess.run(["choco", "install", "scrcpy", "-y"],
-                                        capture_output=True, text=True, timeout=300)
-                if result.returncode == 0:
-                    ok("scrcpy installed successfully via chocolatey.")
-                    return True
+                if _run_install_command([
+                    "winget", "install",
+                    "--id", "Genymobile.scrcpy",
+                    "--exact",
+                    "--silent",
+                    "--accept-package-agreements",
+                    "--accept-source-agreements",
+                ], "winget"):
+                    if _verify_scrcpy_available():
+                        return True
+                    warn(
+                        "winget installed scrcpy, but scrcpy.exe was not found in the current PATH.")
+                warn(
+                    "winget installation failed; falling back to direct GitHub ZIP install.")
+            else:
+                warn(
+                    "winget is not available on this system; using direct GitHub ZIP install.")
 
         elif system == "Darwin":
-            # Try brew
             if shutil.which("brew"):
-                step("Installing scrcpy via Homebrew…")
-                result = subprocess.run(["brew", "install", "scrcpy"],
-                                        capture_output=True, text=True, timeout=300)
-                if result.returncode == 0:
-                    ok("scrcpy installed successfully via Homebrew.")
+                if _run_install_command(["brew", "install", "scrcpy"], "Homebrew"):
                     return True
 
         elif system == "Linux":
-            # Try apt
-            if shutil.which("apt"):
-                step("Installing scrcpy via apt…")
-                result = subprocess.run(["sudo", "apt", "install", "-y", "scrcpy"],
-                                        capture_output=True, text=True, timeout=300)
-                if result.returncode == 0:
-                    ok("scrcpy installed successfully via apt.")
+            if shutil.which("apt-get"):
+                step("Updating package lists…")
+                subprocess.run(["sudo", "apt-get", "update"],
+                               capture_output=True, text=True, timeout=300)
+                if _run_install_command(["sudo", "apt-get", "install", "-y", "scrcpy"], "apt"):
                     return True
-            # Try snap
             if shutil.which("snap"):
-                step("Installing scrcpy via snap…")
-                result = subprocess.run(["sudo", "snap", "install", "scrcpy"],
-                                        capture_output=True, text=True, timeout=300)
-                if result.returncode == 0:
-                    ok("scrcpy installed successfully via snap.")
+                if _run_install_command(["sudo", "snap", "install", "scrcpy"], "snap"):
                     return True
+            if shutil.which("flatpak"):
+                if _run_install_command(["flatpak", "install", "-y", "flathub", "com.genymobile.scrcpy"], "flatpak"):
+                    return True
+
+    except subprocess.TimeoutExpired as e:
+        warn(f"Installation attempt timed out: {e}")
     except Exception as e:
         warn(f"Installation attempt failed: {e}")
 
+    release = _get_latest_scrcpy_release()
+    if release:
+        if system == "Windows":
+            return _install_scrcpy_windows_manual(release)
+        return _install_scrcpy_unix_manual(release)
     return False
 
 
 def require_scrcpy() -> bool:
-    if not shutil.which("scrcpy"):
-        warn("scrcpy not found in PATH.")
-        print("  Attempting automatic installation…")
-        if _install_scrcpy():
-            if shutil.which("scrcpy"):
-                ok("scrcpy is now available.")
-                return True
-        print("  If installation failed, install manually from:")
-        print(c("    https://github.com/Genymobile/scrcpy", DIM))
-        return False
-    return True
+    if shutil.which("scrcpy"):
+        return True
+
+    warn("scrcpy not found in PATH.")
+    print("  Attempting automatic installation…")
+    if _install_scrcpy():
+        if shutil.which("scrcpy"):
+            ok("scrcpy is now available.")
+            return True
+
+    warn("Automatic scrcpy installation failed.")
+    print("  Install scrcpy manually from:")
+    print(c("    https://github.com/Genymobile/scrcpy", DIM))
+    return False
 
 # ─────────────────────────────────────────────
 # Device discovery
