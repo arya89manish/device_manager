@@ -33,16 +33,17 @@ On first run, the script will:
 - Check for `scrcpy` (auto-installs if missing via your package manager)
 
 Supported install methods:
-- **Windows**: winget (`winget install --id Genymobile.scrcpy --exact --silent`)
+- **Windows**: winget (primary), chocolatey (fallback), direct GitHub ZIP download and manual install (last resort)
 - **macOS**: Homebrew
 - **Linux**: apt-get, snap, or flatpak
 
-If `winget` fails or is unavailable, the script falls back to downloading the latest GitHub release and installing from the appropriate ZIP/tarball manually.
+If package managers fail or are unavailable, the script falls back to downloading the latest GitHub release and installing from the appropriate ZIP/tarball manually.
 
 ---
 
 ## Recent fixes
 
+- **Improved Windows scrcpy installation**: Now uses winget as primary installer, with chocolatey fallback and direct GitHub ZIP download as last resort. Handles cases where winget reports "already installed" but scrcpy is not on PATH.
 - **Automatic scrcpy installation**: Script now auto-installs scrcpy at startup if missing (Windows: winget/chocolatey, macOS: Homebrew, Linux: apt/snap)
 - **TCP/IP persistence after cable disconnect**: Reconnect saved TCP/IP devices via new menu option [6] or automatic reconnection on device refresh
 - Added terminal color auto-detection so output stays readable on unsupported consoles
