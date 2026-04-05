@@ -11,7 +11,7 @@ A single Python script to manage Android devices via ADB:
 |------|---------|
 | Python 3.9+ | built-in on most systems |
 | `adb` | [Android Platform Tools](https://developer.android.com/tools/releases/platform-tools) |
-| `scrcpy` | [github.com/Genymobile/scrcpy](https://github.com/Genymobile/scrcpy) |
+| `scrcpy` | Installed automatically on first run, or [manually](https://github.com/Genymobile/scrcpy) |
 
 ### Quick install (macOS/Linux)
 
@@ -22,17 +22,26 @@ brew install android-platform-tools scrcpy
 # Ubuntu / Debian
 sudo apt install adb scrcpy
 
-# Windows — download Platform Tools zip + scrcpy zip, add both to PATH
+# Windows — download Platform Tools zip, add to PATH
+# scrcpy will install automatically on first run via winget/chocolatey
 ```
+
+### Automatic dependency setup
+
+On first run, the script will:
+- Check for `adb` (required — must be installed manually)
+- Check for `scrcpy` (auto-installs if missing via: winget, chocolatey, brew, apt, or snap)
 
 ---
 
 ## Recent fixes
 
-- Added terminal color auto-detection so output stays readable on unsupported consoles.
-- Improved Wi-Fi profile editing: existing profile values are now pre-filled when editing.
-- Fixed open-network CLI handling for `wifi connect --security Open`.
-- Saved Wi-Fi profile file permissions are now restricted only on POSIX platforms.
+- **Automatic scrcpy installation**: Script now auto-installs scrcpy at startup if missing (Windows: winget/chocolatey, macOS: Homebrew, Linux: apt/snap)
+- **TCP/IP persistence after cable disconnect**: Reconnect saved TCP/IP devices via new menu option [6] or automatic reconnection on device refresh
+- Added terminal color auto-detection so output stays readable on unsupported consoles
+- Improved Wi-Fi profile editing: existing profile values are now pre-filled when editing
+- Fixed open-network CLI handling for `wifi connect --security Open`
+- Saved Wi-Fi profile file permissions are now restricted only on POSIX platforms
 
 ---
 
@@ -52,6 +61,8 @@ You'll see a live device table and an action menu:
     [2] Select device → Back to USB mode
     [3] Launch scrcpy on selected device
     [4] Launch scrcpy on ALL devices
+    [6] Reconnect saved TCP/IP devices (after cable disconnect)
+    [w] Wi-Fi manager (profiles · connect · scan · disconnect)
     [5] Refresh device list
     [q] Quit
 ```
@@ -105,6 +116,24 @@ python android_manager.py tcpip -s <SERIAL> -p 5556
 State (USB serial → TCP serial mapping) is saved to `~/.android_manager_state.json`  
 so you can switch back to USB mode even in a new terminal session.
 
+### TCP/IP Persistence — reconnect after cable disconnect
+
+When you enable TCP/IP mode, the script saves the device mapping to `~/.android_manager_state.json`:
+```json
+{
+  "DEVICE_USB_SERIAL": {
+    "tcp_serial": "192.168.1.100:5555",
+    "port": 5555
+  }
+}
+```
+
+**After you unplug the USB cable:**
+- The device stays connected via Wi-Fi TCP/IP
+- On next refresh (option [5]) or next script run, it automatically reconnects to saved TCP/IP devices
+- Or manually use option [6] to reconnect all saved TCP/IP devices
+- This works even across terminal sessions and machine reboots (as long as the device stays on the same Wi-Fi network)
+
 ---
 
 ## Charging disable — notes
@@ -134,6 +163,23 @@ If none work, a warning is shown — TCP/IP still works, only charging control i
 | `Connect`| `USB` or `WIFI` |
 | `Battery`| Current battery % |
 | `Charging`| Charging source or `disabled` |
+
+---
+
+## Automatic dependency installation
+
+The script will check for required dependencies on startup:
+
+**scrcpy** is automatically installed if missing using the following methods:
+- **Windows**: winget (preferred) or Chocolatey
+- **macOS**: Homebrew
+- **Linux**: apt-get (preferred) or snap
+
+**adb** must be installed manually (not auto-installed):
+- Download [Android Platform Tools](https://developer.android.com/tools/releases/platform-tools)
+- Extract and add to your `PATH`
+
+If auto-installation of scrcpy fails, you can still install manually from [github.com/Genymobile/scrcpy](https://github.com/Genymobile/scrcpy).
 
 ---
 

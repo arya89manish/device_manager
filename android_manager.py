@@ -27,6 +27,7 @@ import argparse
 import getpass
 import base64
 import signal
+import platform
 from pathlib import Path
 from typing import Optional
 
@@ -165,10 +166,72 @@ def require_adb():
         sys.exit(1)
 
 
+def _install_scrcpy():
+    """Attempt to install scrcpy via platform-specific methods."""
+    system = platform.system()
+
+    try:
+        if system == "Windows":
+            # Try winget
+            if shutil.which("winget"):
+                step("Installing scrcpy via winget…")
+                result = subprocess.run(["winget", "install", "Genymobile.scrcpy"],
+                                        capture_output=True, text=True, timeout=300)
+                if result.returncode == 0:
+                    ok("scrcpy installed successfully via winget.")
+                    return True
+            # Try chocolatey
+            if shutil.which("choco"):
+                step("Installing scrcpy via chocolatey…")
+                result = subprocess.run(["choco", "install", "scrcpy", "-y"],
+                                        capture_output=True, text=True, timeout=300)
+                if result.returncode == 0:
+                    ok("scrcpy installed successfully via chocolatey.")
+                    return True
+
+        elif system == "Darwin":
+            # Try brew
+            if shutil.which("brew"):
+                step("Installing scrcpy via Homebrew…")
+                result = subprocess.run(["brew", "install", "scrcpy"],
+                                        capture_output=True, text=True, timeout=300)
+                if result.returncode == 0:
+                    ok("scrcpy installed successfully via Homebrew.")
+                    return True
+
+        elif system == "Linux":
+            # Try apt
+            if shutil.which("apt"):
+                step("Installing scrcpy via apt…")
+                result = subprocess.run(["sudo", "apt", "install", "-y", "scrcpy"],
+                                        capture_output=True, text=True, timeout=300)
+                if result.returncode == 0:
+                    ok("scrcpy installed successfully via apt.")
+                    return True
+            # Try snap
+            if shutil.which("snap"):
+                step("Installing scrcpy via snap…")
+                result = subprocess.run(["sudo", "snap", "install", "scrcpy"],
+                                        capture_output=True, text=True, timeout=300)
+                if result.returncode == 0:
+                    ok("scrcpy installed successfully via snap.")
+                    return True
+    except Exception as e:
+        warn(f"Installation attempt failed: {e}")
+
+    return False
+
+
 def require_scrcpy() -> bool:
     if not shutil.which("scrcpy"):
         warn("scrcpy not found in PATH.")
-        print("  Install from: " + c("https://github.com/Genymobile/scrcpy", DIM))
+        print("  Attempting automatic installation…")
+        if _install_scrcpy():
+            if shutil.which("scrcpy"):
+                ok("scrcpy is now available.")
+                return True
+        print("  If installation failed, install manually from:")
+        print(c("    https://github.com/Genymobile/scrcpy", DIM))
         return False
     return True
 
@@ -178,6 +241,17 @@ def require_scrcpy() -> bool:
 
 
 def get_devices() -> list:
+    # First, try to reconnect any previously connected TCP/IP devices
+    state = load_state()
+    for usb_serial, info in list(state.items()):
+        tcp_serial = info.get("tcp_serial")
+        if tcp_serial:
+            # Try to reconnect silently without blocking
+            try:
+                result = adb("connect", tcp_serial, timeout=5)
+            except Exception:
+                pass  # Fail silently, will be detected below
+
     result = adb("devices", "-l")
     devices = []
     for line in result.stdout.splitlines()[1:]:
@@ -897,6 +971,55 @@ def _wifi_connect_manual(serial: str, prefill_ssid: str = ""):
 DEFAULT_TCPIP_PORT = 5555
 
 
+def _verify_tcpip_connection(tcp_serial: str) -> bool:
+    """Verify if a TCP/IP device is still reachable."""
+    try:
+        result = adb("shell", "echo ok", serial=tcp_serial, timeout=5)
+        return result.returncode == 0 and "ok" in result.stdout
+    except subprocess.TimeoutExpired:
+        return False
+    except Exception:
+        return False
+
+
+def _reconnect_tcpip_devices():
+    """Attempt to reconnect to previously connected TCP/IP devices after cable disconnect."""
+    state = load_state()
+    reconnected = []
+    failed = []
+
+    for usb_serial, info in list(state.items()):
+        tcp_serial = info.get("tcp_serial")
+        port = info.get("port", DEFAULT_TCPIP_PORT)
+
+        if not tcp_serial:
+            continue
+
+        # Check if already connected
+        devices = get_devices()
+        if any(d["serial"] == tcp_serial for d in devices):
+            ok(f"TCP/IP device already connected: {c(tcp_serial, GREEN)}")
+            reconnected.append(tcp_serial)
+            continue
+
+        # Try to reconnect
+        step(f"Reconnecting to {c(tcp_serial, CYAN)}…")
+        try:
+            result = adb("connect", tcp_serial, timeout=10)
+            if "connected" in result.stdout.lower():
+                ok(f"Reconnected: {c(tcp_serial, GREEN, BOLD)}")
+                reconnected.append(tcp_serial)
+            else:
+                warn(
+                    f"Failed to reconnect {tcp_serial}: {result.stdout.strip()}")
+                failed.append(tcp_serial)
+        except Exception as e:
+            warn(f"Error reconnecting {tcp_serial}: {e}")
+            failed.append(tcp_serial)
+
+    return reconnected, failed
+
+
 def enable_tcpip(serial: str, port: int = DEFAULT_TCPIP_PORT) -> Optional[str]:
     step(f"Enabling TCP/IP mode on {c(serial, CYAN)} (port {port})…")
     r = adb("tcpip", str(port), serial=serial)
@@ -1067,6 +1190,8 @@ def interactive_menu():
         print(c("    [2]", CYAN) + " Select device → Back to USB mode")
         print(c("    [3]", CYAN) + " Launch scrcpy on selected device")
         print(c("    [4]", CYAN) + " Launch scrcpy on ALL devices")
+        print(c("    [6]", CYAN) +
+              " Reconnect saved TCP/IP devices (after cable disconnect)")
         print(c("  ── Wi-Fi ────────────────────────────────────────────", DIM))
         print(c("    [w]", MAGENTA) +
               " Wi-Fi manager  (profiles · connect · scan · disconnect)")
@@ -1148,6 +1273,20 @@ def interactive_menu():
         elif choice == "5":
             info("Refreshing…")
             continue
+
+        elif choice == "6":
+            hdr("Reconnecting TCP/IP Devices")
+            reconnected, failed = _reconnect_tcpip_devices()
+            if reconnected:
+                ok(f"Successfully reconnected: {len(reconnected)} device(s)")
+                for tcp_ser in reconnected:
+                    print(f"  • {c(tcp_ser, GREEN)}")
+            if failed:
+                warn(f"Failed to reconnect: {len(failed)} device(s)")
+                for tcp_ser in failed:
+                    print(f"  • {c(tcp_ser, RED)}")
+            if not reconnected and not failed:
+                info("No TCP/IP devices in saved state.")
 
         else:
             warn("Unknown option.")
@@ -1439,6 +1578,8 @@ Examples:
 # ─────────────────────────────────────────────
 if __name__ == "__main__":
     require_adb()
+    step("Checking dependencies…")
+    require_scrcpy()
     signal.signal(signal.SIGINT,
                   lambda *_: (print(c("\n\n  Goodbye!\n", CYAN)), sys.exit(0)))
     cli()
